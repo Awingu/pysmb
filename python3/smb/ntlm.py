@@ -161,7 +161,10 @@ def generateChallengeResponseV2(password, user, server_challenge, server_info, d
     d = MD4()
     d.update(password.encode('UTF-16LE'))
     ntlm_hash = d.digest()   # The NT password hash
-    response_key = hmac.new(ntlm_hash, (user.upper() + domain).encode('UTF-16LE')).digest()  # The NTLMv2 password hash. In [MS-NLMP], this is the result of NTOWFv2 and LMOWFv2 functions
+    # U+00DF ("ß" or "Eszett") is uppercased to "SS" in Python 3, but Windows 2008/2012 expect the Python 2.7 behaviour of uppercasing to itself.
+    # We fix this for Python 3 by special casing the Eszett.
+    user_upper = '\u00df'.join([segment.upper() for segment in user.split('\u00df')])
+    response_key = hmac.new(ntlm_hash, (user_upper + domain).encode('UTF-16LE')).digest()  # The NTLMv2 password hash. In [MS-NLMP], this is the result of NTOWFv2 and LMOWFv2 functions
     temp = client_timestamp + client_challenge + domain.encode('UTF-16LE') + server_info
 
     nt_challenge_response = hmac.new(response_key, server_challenge + temp).digest()
