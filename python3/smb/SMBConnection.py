@@ -1,5 +1,5 @@
 
-import os, logging, select, socket, types, struct
+import os, logging, select, socket, types, struct, errno
 from .smb_constants import *
 from .smb_structs import *
 from .base import SMB, NotConnectedError, NotReadyError, SMBTimeout
@@ -99,6 +99,7 @@ class SMBConnection(SMB):
 
         self.auth_result = None
         self.sock = socket.socket(sock_family)
+        self.sock.settimeout(timeout)
         self.sock.connect(( ip, port ))
 
         self.is_busy = True
@@ -223,7 +224,7 @@ class SMBConnection(SMB):
     def getAttributes(self, service_name, path, timeout = 30):
         """
         Retrieve information about the file at *path* on the *service_name*.
-        
+
         :param string/unicode service_name: the name of the shared folder for the *path*
         :param string/unicode path: Path of the file on the remote server. If the file cannot be opened for reading, an :doc:`OperationFailure<smb_exceptions>` will be raised.
         :return: A :doc:`smb.base.SharedFile<smb_SharedFile>` instance containing the attributes of the file.
@@ -300,7 +301,7 @@ class SMBConnection(SMB):
             self.is_busy = False
 
         return results[0]
-    
+
     def storeFile(self, service_name, path, file_obj, timeout = 30):
         """
         Store the contents of the *file_obj* at *path* on the *service_name*.
@@ -314,7 +315,7 @@ class SMBConnection(SMB):
         """
         return self.storeFileFromOffset(service_name, path, file_obj, 0, True, timeout)
 
-    def storeFileFromOffset(self, service_name, path, file_obj, offset = 0, truncate = False, timeout = 30):    
+    def storeFileFromOffset(self, service_name, path, file_obj, offset = 0, truncate = False, timeout = 30):
         """
         Store the contents of the *file_obj* at *path* on the *service_name*.
 
@@ -376,6 +377,38 @@ class SMBConnection(SMB):
                 self._pollForNetBIOSPacket(timeout)
         finally:
             self.is_busy = False
+
+    def resetFileAttributes(self, service_name, path_file_pattern, timeout = 30):
+        """
+        Reset file attributes of one or more regular files or folders.
+        It supports the use of wildcards in file names, allowing for unlocking of multiple files/folders in a single request.
+        This function is very helpful when deleting files/folders that are read-only.
+        Note: this function is currently only implemented for SMB2! Technically, it sets the FILE_ATTRIBUTE_NORMAL flag, therefore clearing all other flags. (See https://msdn.microsoft.com/en-us/library/cc232110.aspx for further information)
+        
+        :param string/unicode service_name: Contains the name of the shared folder.
+        :param string/unicode path_file_pattern: The pathname of the file(s) to be deleted, relative to the service_name.
+                                                 Wildcards may be used in the filename component of the path.
+                                                 If your path/filename contains non-English characters, you must pass in an unicode string.
+        :return: None
+        """
+        if not self.sock:
+            raise NotConnectedError('Not connected to server')
+
+        def cb(r):
+            self.is_busy = False
+
+        def eb(failure):
+            self.is_busy = False
+            raise failure
+
+        self.is_busy = True
+        try:
+            self._resetFileAttributes(service_name, path_file_pattern, cb, eb, timeout = timeout)
+            while self.is_busy:
+                self._pollForNetBIOSPacket(timeout)
+        finally:
+            self.is_busy = False
+
 
     def createDirectory(self, service_name, path, timeout = 30):
         """
@@ -514,7 +547,7 @@ class SMBConnection(SMB):
                 data = data + d
                 read_len -= len(d)
             except select.error as ex:
-                if type(ex) is tuple:
+                if isinstance(ex, tuple):
                     if ex[0] != errno.EINTR and ex[0] != errno.EAGAIN:
                         raise ex
                 else:
@@ -541,7 +574,7 @@ class SMBConnection(SMB):
                 data = data + d
                 read_len -= len(d)
             except select.error as ex:
-                if type(ex) is tuple:
+                if isinstance(ex, tuple):
                     if ex[0] != errno.EINTR and ex[0] != errno.EAGAIN:
                         raise ex
                 else:
